@@ -90,7 +90,12 @@ public:
     watcherPaths.setDescription("Semicolon-separated list of paths watched by experimental watcher");
     watcherPaths.setDefaultValue("");
 
-    return {indexing, paths, watcherPaths};
+    auto useRegex = Preference::makeCheckbox("useRegex");
+    useRegex.setTitle("Use regex search");
+    useRegex.setDescription("Enable regular expression matching for file searches");
+    useRegex.setDefaultValue(false);
+
+    return {indexing, paths, watcherPaths, useRegex};
   }
 
   void preferenceValuesChanged(const QJsonObject &preferences) const override {
