@@ -26,7 +26,10 @@ public:
   std::shared_ptr<DbWriter> m_writer;
   std::vector<std::filesystem::path> m_entrypoints;
   std::vector<std::filesystem::path> m_watcherPaths;
-  FileIndexerDatabase m_db;
+  std::vector<std::string> m_excludedFilenames;
+  std::unique_ptr<FileIndexerDatabase> m_ownedDb; // Owned database for production use
+  FileIndexerDatabase *m_db;                      // Points to either owned or injected database
+  std::optional<std::filesystem::path> m_dbPath;  // Database path for creating per-thread connections
 
   ScanDispatcher m_dispatcher;
 
@@ -46,5 +49,5 @@ public:
                                                      const QueryParams &params = {}) const override;
   void start() override;
 
-  FileIndexer();
+  FileIndexer(std::optional<std::reference_wrapper<FileIndexerDatabase>> db = std::nullopt);
 };

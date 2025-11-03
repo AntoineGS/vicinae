@@ -38,7 +38,7 @@ void FileIndexer::startFullscan() {
 void FileIndexer::rebuildIndex() { startFullscan(); }
 
 void FileIndexer::start() {
-  auto lastScan = m_db.getLastScan();
+  auto lastScan = m_db->getLastScan();
 
   // this is our first scan
   if (!lastScan) {
@@ -49,7 +49,7 @@ void FileIndexer::start() {
 
   // Scans marked as started when we call start() (that is, at the beginning of the program)
   // are considered failed because they were not able to finish.
-  auto startedScans = m_db.listStartedScans();
+  auto startedScans = m_db->listStartedScans();
 
   for (const auto &scan : startedScans) {
     if (scan.type != ScanType::Full) continue;
@@ -100,19 +100,30 @@ void FileIndexer::preferenceValuesChanged(const QJsonObject &preferences) {
 QFuture<std::vector<IndexerFileResult>> FileIndexer::queryAsync(std::string_view view,
                                                                 const QueryParams &params) const {
   auto searchQuery = qStringFromStdView(view);
-  QString finalQuery = m_useRegex ? searchQuery : preparePrefixSearchQuery(view);
+  bool useRegex = params.useRegex || m_useRegex;
+  QString finalQuery = useRegex ? searchQuery : preparePrefixSearchQuery(view);
   auto promise = std::make_shared<QPromise<std::vector<IndexerFileResult>>>();
   auto future = promise->future();
-  bool useRegex = m_useRegex;
 
   QThreadPool::globalInstance()->start(
-      [params, finalQuery, useRegex, promise = std::move(promise)]() mutable {
+      [this, dbPath = m_dbPath, params, finalQuery, useRegex, promise = std::move(promise)]() mutable {
         std::vector<fs::path> paths;
         {
-          FileIndexerDatabase db;
-          QueryParams paramsWithRegex = params;
-          paramsWithRegex.useRegex = useRegex;
-          paths = db.search(finalQuery.toStdString(), paramsWithRegex);
+          // Each thread needs its own database connection (Qt SQLite threading requirement)
+          // Exception: :memory: databases use the shared connection (for tests only)
+          if (dbPath.has_value() && dbPath.value().string() == ":memory:") {
+            // For :memory: databases (tests), use the shared connection
+            // This violates threading rules but tests are single-threaded
+            QueryParams paramsWithRegex = params;
+            paramsWithRegex.useRegex = useRegex;
+            paths = m_db->search(finalQuery.toStdString(), paramsWithRegex);
+          } else {
+            // For file-based databases (production), create a new connection
+            FileIndexerDatabase db(dbPath);
+            QueryParams paramsWithRegex = params;
+            paramsWithRegex.useRegex = useRegex;
+            paths = db.search(finalQuery.toStdString(), paramsWithRegex);
+          }
         }
 
         std::vector<IndexerFileResult> results;
@@ -128,6 +139,18 @@ QFuture<std::vector<IndexerFileResult>> FileIndexer::queryAsync(std::string_view
   return future;
 }
 
-FileIndexer::FileIndexer() : m_writer(std::make_shared<DbWriter>()), m_dispatcher(m_writer) {
-  m_db.runMigrations();
+FileIndexer::FileIndexer(std::optional<std::reference_wrapper<FileIndexerDatabase>> db)
+    : m_writer(std::make_shared<DbWriter>()), m_dispatcher(m_writer) {
+  if (db) {
+    // Use injected database
+    m_db = &(db->get());
+  } else {
+    // Create owned database for production use
+    m_ownedDb = std::make_unique<FileIndexerDatabase>();
+    m_db = m_ownedDb.get();
+  }
+  m_db->runMigrations();
+
+  // Store the database path for creating per-thread connections
+  m_dbPath = m_db->databasePath();
 }

@@ -17,6 +17,7 @@
 class FileIndexerDatabase : public QObject {
   QSqlDatabase m_db;
   QString m_connectionId;
+  std::optional<std::filesystem::path> m_dbPath;
 
 public:
   struct ScanRecord {
@@ -54,7 +55,8 @@ public:
   void runMigrations();
 
   QSqlDatabase *database();
+  std::optional<std::filesystem::path> databasePath() const { return m_dbPath; }
 
-  FileIndexerDatabase();
+  FileIndexerDatabase(std::optional<std::filesystem::path> dbPath = std::nullopt);
   ~FileIndexerDatabase();
 };

@@ -228,9 +228,9 @@ std::vector<fs::path> FileIndexerDatabase::search(std::string_view searchQuery,
 
     queryString =
         QString(R"(
-    SELECT f.path, tri_idx.rank FROM indexed_file f 
+    SELECT f.path, tri_idx.rank FROM indexed_file f
         JOIN tri_idx ON tri_idx.rowid = f.id
-        WHERE %2%3
+        WHERE %1%2
         ORDER BY f.relevancy_score, tri_idx.rank
         LIMIT :limit
         OFFSET :offset
@@ -434,12 +434,15 @@ static void sqliteRegexpCallback(sqlite3_context *context, int argc, sqlite3_val
   sqlite3_result_int(context, regex.match(textStr).hasMatch() ? 1 : 0);
 }
 
-FileIndexerDatabase::FileIndexerDatabase() : m_connectionId(createRandomConnectionId()) {
+FileIndexerDatabase::FileIndexerDatabase(std::optional<std::filesystem::path> dbPath)
+    : m_connectionId(createRandomConnectionId()), m_dbPath(dbPath.value_or(getDatabasePath())) {
   m_db = QSqlDatabase::addDatabase("QSQLITE", m_connectionId);
-  m_db.setDatabaseName(getDatabasePath().c_str());
+
+  std::string dbPathStr = m_dbPath.value().string();
+  m_db.setDatabaseName(QString::fromStdString(dbPathStr));
 
   if (!m_db.open()) {
-    qCritical() << "Failed to open datbase at" << getDatabasePath();
+    qCritical() << "Failed to open database at" << dbPathStr.c_str();
     return;
   }
 
