@@ -16,7 +16,6 @@
 #include <QRegularExpression>
 #include <QSqlDriver>
 #include <QVariant>
-#include <sqlite3.h>
 
 // clang-format off
 static const std::vector<std::string> SQLITE_PRAGMAS = {
@@ -256,6 +255,7 @@ std::vector<fs::path> FileIndexerDatabase::search(std::string_view searchQuery,
   std::string_view regexString;
   std::string staticChars;
   bool hasPattern = false;
+  QRegularExpression regex;
 
   if (params.useRegex) {
     regexString = searchQuery;
@@ -265,24 +265,25 @@ std::vector<fs::path> FileIndexerDatabase::search(std::string_view searchQuery,
     bool hasSearchString = !searchQuery.empty();
     hasPattern = !regexString.empty();
 
+    if (hasPattern) { regex = QRegularExpression(qStringFromStdView(regexString)); }
+
     queryString =
         QString(R"(
-    SELECT f.path, tri_idx.rank FROM indexed_file f 
+    SELECT f.path, tri_idx.rank FROM indexed_file f
         JOIN tri_idx ON tri_idx.rowid = f.id
-        WHERE %2%3
+        WHERE %1
         ORDER BY f.relevancy_score, tri_idx.rank
         LIMIT :limit
         OFFSET :offset
   )")
-            .arg(hasSearchString ? "tri_idx MATCH '" + qStringFromStdView(searchQuery) + "'" : "1=1")
-            .arg(hasPattern ? " AND f.name REGEXP :pattern" : "");
+            .arg(hasSearchString ? "tri_idx MATCH '" + qStringFromStdView(searchQuery) + "'" : "1=1");
   } else {
     queryString = QString(R"(
-  	SELECT path, rank FROM indexed_file f 
-	JOIN unicode_idx ON unicode_idx.rowid = f.id 
-	WHERE 
+  	SELECT path, rank FROM indexed_file f
+	JOIN unicode_idx ON unicode_idx.rowid = f.id
+	WHERE
 	    unicode_idx MATCH '%1'
-	ORDER BY f.relevancy_score DESC, unicode_idx.rank 
+	ORDER BY f.relevancy_score DESC, unicode_idx.rank
 	LIMIT :limit
 	OFFSET :offset
   )")
@@ -292,7 +293,6 @@ std::vector<fs::path> FileIndexerDatabase::search(std::string_view searchQuery,
   QSqlQuery query(m_db);
   query.prepare(queryString);
 
-  if (params.useRegex && hasPattern) { query.bindValue(":pattern", qStringFromStdView(regexString)); }
   query.bindValue(":limit", params.pagination.limit);
   query.bindValue(":offset", params.pagination.offset);
 
@@ -305,6 +305,12 @@ std::vector<fs::path> FileIndexerDatabase::search(std::string_view searchQuery,
 
   while (query.next()) {
     fs::path path = query.value(0).toString().toStdString();
+
+    // Filter by regex in C++ if needed
+    if (params.useRegex && hasPattern) {
+      QString filename = QString::fromStdString(path.filename().string());
+      if (!regex.match(filename).hasMatch()) { continue; }
+    }
 
     if (fs::exists(path, ec)) { results.emplace_back(path); }
   }
@@ -456,31 +462,6 @@ void FileIndexerDatabase::indexFiles(const std::vector<std::filesystem::path> &p
   if (!m_db.commit()) { qCritical() << "Failed to commit batchIndex" << m_db.lastError(); }
 }
 
-static void sqliteRegexpCallback(sqlite3_context *context, int argc, sqlite3_value **argv) {
-  if (argc != 2) {
-    sqlite3_result_error(context, "REGEXP requires 2 arguments", -1);
-    return;
-  }
-
-  const char *pattern = reinterpret_cast<const char *>(sqlite3_value_text(argv[0]));
-  const char *text = reinterpret_cast<const char *>(sqlite3_value_text(argv[1]));
-
-  if (!pattern || !text) {
-    sqlite3_result_null(context);
-    return;
-  }
-
-  QRegularExpression regex(QString::fromUtf8(pattern));
-  QString textStr = QString::fromUtf8(text);
-
-  if (!regex.isValid()) {
-    sqlite3_result_error(context, "Invalid regular expression", -1);
-    return;
-  }
-
-  sqlite3_result_int(context, regex.match(textStr).hasMatch() ? 1 : 0);
-}
-
 FileIndexerDatabase::FileIndexerDatabase() : m_connectionId(createRandomConnectionId()) {
   m_db = QSqlDatabase::addDatabase("QSQLITE", m_connectionId);
   m_db.setDatabaseName(getDatabasePath().c_str());
@@ -488,15 +469,6 @@ FileIndexerDatabase::FileIndexerDatabase() : m_connectionId(createRandomConnecti
   if (!m_db.open()) {
     qCritical() << "Failed to open datbase at" << getDatabasePath();
     return;
-  }
-
-  QVariant v = m_db.driver()->handle();
-  if (v.isValid() && qstrcmp(v.typeName(), "sqlite3*") == 0) {
-    sqlite3 *db_handle = *static_cast<sqlite3 **>(v.data());
-    if (db_handle) {
-      sqlite3_create_function(db_handle, "REGEXP", 2, SQLITE_UTF8, nullptr, sqliteRegexpCallback, nullptr,
-                              nullptr);
-    }
   }
 
   QSqlQuery query(m_db);
