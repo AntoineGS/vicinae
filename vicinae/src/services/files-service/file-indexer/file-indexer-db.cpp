@@ -16,7 +16,25 @@
 #include <QRegularExpression>
 #include <QSqlDriver>
 #include <QVariant>
-#include <sqlite3.h>
+
+// Forward declarations to avoid including sqlite3.h
+struct sqlite3;
+struct sqlite3_context;
+struct sqlite3_value;
+
+extern "C" {
+void sqlite3_result_int(sqlite3_context *, int);
+void sqlite3_result_error(sqlite3_context *, const char *, int);
+void sqlite3_result_null(sqlite3_context *);
+const unsigned char *sqlite3_value_text(sqlite3_value *);
+int sqlite3_create_function(sqlite3 *db, const char *zFunctionName, int nArg, int eTextRep, void *pApp,
+                             void (*xFunc)(sqlite3_context *, int, sqlite3_value **),
+                             void (*xStep)(sqlite3_context *, int, sqlite3_value **),
+                             void (*xFinal)(sqlite3_context *));
+}
+
+// SQLite constants
+constexpr int SQLITE_UTF8 = 1;
 
 // clang-format off
 static const std::vector<std::string> SQLITE_PRAGMAS = {
