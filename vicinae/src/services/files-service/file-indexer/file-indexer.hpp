@@ -50,5 +50,5 @@ public:
                                                      const QueryParams &params = {}) override;
   void start() override;
 
-  FileIndexer();
+  FileIndexer(std::optional<std::reference_wrapper<FileIndexerDatabase>> db = std::nullopt);
 };

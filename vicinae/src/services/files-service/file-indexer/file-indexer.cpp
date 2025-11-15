@@ -72,7 +72,7 @@ void FileIndexer::markScanAsInterrupted(std::optional<FileIndexerDatabase::ScanR
 
 void FileIndexer::start() {
   for (const auto &entrypoint : m_entrypoints) {
-    auto lastScan = m_db.getLastScan(entrypoint, ScanType::Full);
+    auto lastScan = m_db->getLastScan(entrypoint, ScanType::Full);
 
     // we have never had a full scan or it failed
     if (!lastScan) {
@@ -91,7 +91,7 @@ void FileIndexer::start() {
       continue;
     }
 
-    lastScan = m_db.getLastScan(entrypoint, ScanType::Incremental);
+    lastScan = m_db->getLastScan(entrypoint, ScanType::Incremental);
     if (lastScan && lastScan.value().status != ScanStatus::Succeeded) { markScanAsInterrupted(lastScan); }
 
     qInfo() << "Starting incremental scan for entrypoint" << entrypoint.c_str();
@@ -141,6 +141,15 @@ QFuture<std::vector<IndexerFileResult>> FileIndexer::queryAsync(std::string_view
   return m_queryEngine.query(view, params);
 }
 
-FileIndexer::FileIndexer() : m_writer(std::make_shared<DbWriter>()), m_dispatcher(m_writer) {
-  m_db.runMigrations();
+FileIndexer::FileIndexer(std::optional<std::reference_wrapper<FileIndexerDatabase>> db)
+    : m_writer(std::make_shared<DbWriter>()), m_dispatcher(m_writer) {
+  if (db) {
+    // Use injected database
+    m_db = &(db->get());
+  } else {
+    // Create owned database for production use
+    m_ownedDb = std::make_unique<FileIndexerDatabase>();
+    m_db = m_ownedDb.get();
+  }
+  m_db->runMigrations();
 }
